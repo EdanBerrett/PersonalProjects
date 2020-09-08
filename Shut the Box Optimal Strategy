@@ -1,1 +1,284 @@
+import numpy as np
+import itertools  
+import random
+import matplotlib.pyplot as plt
+from scipy.special import binom as bc
 
+'''https://en.wikipedia.org/wiki/Shut_the_Box The version I have considered here has tiles 1-9, 
+and two dice must be rolled unless tiles 7-9 are shut, in which case the option to roll only one die
+becomes available'''
+
+die_max = 6
+
+box_max = 9
+
+die_only_range = 3
+
+numbers = np.arange(1,box_max+1,1)
+
+bin_states = [] #list of binary strings in array format representing every possible state of the box, 1=open, 0=closed 
+
+for i in range(2**box_max): #this loop generates all possible states by generating every binary number from 000000000 to 111111111
+
+    bin_state = np.zeros(box_max)
+    
+    for j in range(len(bin(i)[2:])):
+
+        bin_state[-j-1] += int(bin(i)[2:][-j-1])
+        
+    bin_states.append((list(bin_state)))
+
+state_sums = np.zeros(2**box_max) #list of the total number of open tiles of each state e.g. 010010010 has sum 3
+
+for i in range(2**box_max): #this fills the above list with ith element corresponding to ith element of list of states
+    
+    state_sums[i] += sum(bin_states[i])
+        
+sorter = np.argsort(state_sums) #orders the indices of the list of sums so that the sums are in ascending order
+
+
+ordered_bin_states = [] #list of states starting with 000000000 then all states with only one tile open, then all with 2 etc
+
+for i in range(2**box_max): #fills above list as per its description
+    
+    ordered_bin_states.append(bin_states[sorter[i]])
+
+expectations = np.zeros(2**box_max) #list of expected finishing scores for each state, assuming optimal strategy
+
+use_both_dice = np.zeros(2**box_max) #indicates whether both dice should be rolled for optimal result, given the state
+    
+
+'singlet-state expectations:' #start with all states with only one open tile, as there is no choice about which tile to shut after 
+                            #rolling, only whether to roll 1 or 2 die
+
+for i in range(box_max):
+    
+    value = sum(ordered_bin_states[i+1]*numbers) #final score if die/dice roll doesn't match open tile number
+        
+    if value <= die_max: #should only roll one die in this case to minimise expected final score
+    
+        expectations[i+1] += value*(die_max-1)/die_max #expected score of (i+1)th ordered_bin_state
+        
+    else: #should roll both dice otherwise
+        
+        expectations[i+1] += value*(1-(2*die_max+1-value)/die_max**2) #expected score of (i+1)th ordered_bin_state
+        use_both_dice[i+1] += 1
+        
+'define x-state as state with x open tiles'
+
+'remaining expectations:' #can now build up expectations of remaining states, since 2-states have expectations in terms of those of 
+                        #the singlet states, and x-state expectations are in terms of lower-numbered states
+
+for i in range(box_max-1): #will iterate starting from singlet-states
+    
+    next_layer_length = bc(box_max,i+2) #given we are at level of (i+1)-states, this is number of (i+2)-states that we will calculate
+                                        #expectations for
+
+    start_index = 0
+    
+    for j in range(i+2):
+        
+        start_index += bc(box_max,j) #need to skip past all lower-numbered states than (i+2)-states in ordered_bin_states list to 
+                                    #calculate expectations of (i+2)-states
+        
+    choices = ordered_bin_states[0:int(start_index)] #all lower-numbered states including "unreachable ones"
+    
+    next_layer_states = ordered_bin_states[int(start_index):int(start_index+next_layer_length)]
+    
+    for k in range(len(next_layer_states)):
+        
+        x = next_layer_states[k]
+        
+        possible_choices = [] #not all lower-numbered states are "reachable" from a given (i+2)-state
+        possible_choices_expectations = [] #expected final scores of all reachable lower-numbered states
+        die_probs = []
+        dice_probs = []
+        
+        for j in range(len(choices)):
+            
+            if j > 0:
+                    
+                if np.min(np.asarray(x)-np.asarray(choices[j])) >= 0: #i.e. no tiles that were closed become open in the 
+                                                                    #lower-numbered state - first criterion for reachability
+                    
+                    value = sum(x*numbers)-sum(choices[j]*numbers) #die roll that would be needed to go from the (i+2)-state to the 
+                                                                    #lower-numbered state
+                    
+                    if value <= 2*die_max: #second criterion for reachability
+   
+                        possible_choices.append(choices[j])
+                        possible_choices_expectations.append(expectations[j])
+                        
+                        if value <= die_max: #possible to reach with either single or double roll
+                            
+                            if sum(x[-die_only_range:]) == 0: #if 7,8,9 are shut
+
+                                die_probs.append(1/die_max)
+                                dice_probs.append((value-1)/die_max**2) #can either roll die or dice
+                            
+                            else:
+                                
+                                die_probs.append(0) #can't roll die if 7,8,9 not shut
+                                dice_probs.append((2*die_max+1-value)/die_max**2)
+                                
+                        else:
+                                
+                            die_probs.append(0) #cannot reach with single roll
+                            dice_probs.append((2*die_max+1-value)/die_max**2)
+                
+        if i == 0: #start with singlet states to get 2-state expectations and start iteration
+            
+            die_expectation = np.sum(np.asarray(die_probs)*np.asarray(possible_choices_expectations))+(1-sum(die_probs))*sum(x*numbers)
+            dice_expectation = np.sum(np.asarray(dice_probs)*np.asarray(possible_choices_expectations))+(1-sum(dice_probs))*sum(x*numbers)
+             
+            if die_expectation < dice_expectation:
+                
+                if sum(x[-die_only_range:]) == 0:
+                
+                    expectations[k+int(start_index)] += die_expectation
+                
+                else:
+                    
+                    expectations[k+int(start_index)] += dice_expectation
+                    use_both_dice[k+int(start_index)] += 1
+                    
+            else:
+                    
+                expectations[k+int(start_index)] += dice_expectation
+                use_both_dice[k+int(start_index)] += 1
+                
+        else:
+            
+            possible_choices_sums = []
+            
+            for y in possible_choices:
+                
+                possible_choices_sums.append(sum(y*numbers)) 
+                
+            possible_choices_expectations_sorter = np.argsort(possible_choices_expectations) #for 3 states and higher, in general 
+            #there will be multiple shut options for a given roll, so need to order from lowest to highest expectation to identify 
+            #ones with lowest expecation if optimal strategy is to be employed 
+            
+            sorted_possible_choices_sums = []
+            sorted_possible_choices = []
+            sorted_possible_choices_expectations = []
+            sorted_die_probs = []
+            sorted_dice_probs = []
+            
+            for l in range(len(possible_choices_expectations_sorter)):
+                
+                sorted_possible_choices_sums.append(possible_choices_sums[possible_choices_expectations_sorter[l]])
+                sorted_possible_choices.append(possible_choices[possible_choices_expectations_sorter[l]])
+                sorted_possible_choices_expectations.append(possible_choices_expectations[possible_choices_expectations_sorter[l]])
+                sorted_die_probs.append(die_probs[possible_choices_expectations_sorter[l]])
+                sorted_dice_probs.append(dice_probs[possible_choices_expectations_sorter[l]])
+ 
+            count = 0
+            
+            while count < len(sorted_possible_choices_sums):
+
+                if sorted_possible_choices_sums[-count-1] in sorted_possible_choices_sums[:-count-1]: #remove every possible 
+                    #lower-numbered state where there is another choice that can be selected, given a particular roll, with a lower expectation
+                    
+                    sorted_possible_choices_sums.pop(-count-1)
+                    sorted_possible_choices.pop(-count-1)
+                    sorted_possible_choices_expectations.pop(-count-1)
+                    sorted_die_probs.pop(-count-1)
+                    sorted_dice_probs.pop(-count-1) 
+                    
+                else:
+                
+                    count += 1
+
+            die_expectation = np.sum(np.asarray(sorted_die_probs)*np.asarray(sorted_possible_choices_expectations))+(1-sum(sorted_die_probs))*sum(x*numbers)
+            dice_expectation = np.sum(np.asarray(sorted_dice_probs)*np.asarray(sorted_possible_choices_expectations))+(1-sum(sorted_dice_probs))*sum(x*numbers)
+             
+            if die_expectation < dice_expectation:
+                
+                if sum(x[-die_only_range:]) == 0:
+                
+                    expectations[k+int(start_index)] += die_expectation
+                
+                else:
+                    
+                    expectations[k+int(start_index)] += dice_expectation
+                    use_both_dice[k+int(start_index)] += 1
+                    
+            else:
+            
+                expectations[k+int(start_index)] += dice_expectation
+                use_both_dice[k+int(start_index)] += 1
+                
+
+'Simulate the game 100 times'
+
+def possible_new_states(state,roll):
+
+    start_index = 0
+    
+    for j in range(int(sum(state))):
+        
+        start_index += bc(box_max,j)
+        
+    choices = ordered_bin_states[0:int(start_index)]
+    
+    possible_choices = []
+    possible_choices_expectations = []
+    
+    for j in range(len(choices)):
+        
+        if sum(state*numbers)-sum(choices[j]*numbers) == roll:
+            
+            if np.min(np.asarray(state)-np.asarray(choices[j])) >= 0:
+   
+                possible_choices.append(choices[j])
+                possible_choices_expectations.append(expectations[j])
+                    
+    return possible_choices,possible_choices_expectations
+
+
+scores = []
+shuts = 0
+
+for i in range(100):
+
+    print(i)
+    
+    state = list(np.ones(box_max))
+    
+    index = ordered_bin_states.index(state)
+    
+    roll_1 = np.random.choice(np.arange(1,die_max+1,1))
+    roll_2 = np.random.choice(np.arange(1,die_max+1,1))
+    
+    roll = roll_1 + roll_2
+    
+    while len(possible_new_states(state,roll)[0]) > 0:
+
+        state = possible_new_states(state,roll)[0][np.argmin(possible_new_states(state,roll)[1])]
+        
+        index = ordered_bin_states.index(state)
+        
+        roll_1 = np.random.choice(np.arange(1,die_max+1,1))
+        roll_2 = np.random.choice(np.arange(1,die_max+1,1))
+        
+        if sum(state[-die_only_range:]) == 0:
+    
+            roll = roll_1 + use_both_dice[index]*roll_2
+            
+        else:
+            
+            roll = roll_1 + roll_2
+    
+    scores.append(sum(state*numbers))
+    
+    if sum(state*numbers) == 0:
+        
+        shuts += 1
+
+
+print(shuts) #number of times the box gets completely shut
+print(sum(scores)/100) #average final score
+print(np.std(np.asarray(scores))) #standard deviation of final score
+
+plt.hist(scores,bins=45) #score distribution
